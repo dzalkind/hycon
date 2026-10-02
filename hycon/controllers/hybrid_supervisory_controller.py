@@ -28,7 +28,7 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
             cname: The name of the controller, which should correspond to a key in the plant
                 parameters dictionary. Defaults to "supervisor".
             controller_parameters: Dictionary of controller parameters. Should include keys
-                "component_controllers" and "curtailment_order". See set_controller_parameters for
+                "component_controllers" and "control_order". See set_controller_parameters for
                 details. Defaults to empty dictionary.
             verbose: Whether to print additional information during controller operation.
         """
@@ -49,7 +49,8 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
     def set_controller_parameters(
         self,
         component_controllers=[],
-        curtailment_order=None,
+        control_order=None,
+        minimum_power=None,
     ):
         """
         Set controller parameters for HybridSupervisoryControllerGeneric.
@@ -58,7 +59,7 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
             component_controllers: List of component controllers to coordinate. Should be
                 instantiated Hycon-compatible controllers with cnames corresponding to the plant
                 components in the simulation.
-            curtailment_order: List of integers corresponding to the order in which to curtail
+            control_order: List of integers corresponding to the order in which to control
                 components when the overall power reference exceeds the interconnection limit.
             minimum_power: List of floats corresponding to the minimum power that each component
                 should be allowed to produce, even when curtailing to meet the interconnection
@@ -75,28 +76,40 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
         else:
             self.component_controllers = component_controllers
 
-        # Check valid curtailment_order
-        if curtailment_order is None:
+        # Check valid control_order
+        if control_order is None:
             # Default is reverse order of component_controllers
-            self.curtailment_order = list(range(0, len(component_controllers) - 1, -1, -1))
-        elif len(curtailment_order) != len(component_controllers) and not any(
-            isinstance(co, (list, tuple, np.ndarray)) for co in curtailment_order
+            self.control_order = list(range(0, len(component_controllers)))
+        elif len(control_order) != len(component_controllers) and not any(
+            isinstance(co, (list, tuple, np.ndarray)) for co in control_order
         ):
-            raise ValueError("curtailment_order must be the same length as component_controllers.")
-        elif not all([type(c) is int and c >= 0 for c in curtailment_order]):
+            raise ValueError("control_order must be the same length as component_controllers.")
+        elif not all([type(c) is int and c >= 0 for c in control_order]):
             raise ValueError(
-                "All entries in curtailment_order must be non-negative integers corresponding to "
+                "All entries in control_order must be non-negative integers corresponding to "
                 "indices of component_controllers."
             )
-        elif (
-            max(curtailment_order) != len(set(curtailment_order)) - 1 or min(curtailment_order) != 0
-        ):
+        elif max(control_order) != len(set(control_order)) - 1 or min(control_order) != 0:
             raise ValueError(
-                "curtailment_order must contain integers corresponding to the curtailment order of "
+                "control_order must contain integers corresponding to the control order of "
                 "component_controllers, starting at 0 and without skipping an integer."
             )
         else:
-            self.curtailment_order = curtailment_order
+            self.control_order = control_order
+
+        # Check valid minimum_power
+        if minimum_power is None:
+            # Default is reverse order of component_controllers
+            self.minimum_power = np.zeros_like(component_controllers)
+        elif len(minimum_power) != len(component_controllers):
+            raise ValueError("minimum_power must be the same length as component_controllers.")
+        elif not all([isinstance(c, (float, int)) for c in minimum_power]):
+            raise ValueError(
+                "All entries in minimum_power must be floats or integers corresponding"
+                " to indices of component_controllers."
+            )
+        else:
+            self.minimum_power = minimum_power
 
     def compute_controls(self, measurements_dict):
         """
@@ -162,14 +175,14 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
         # the interconnection limit, then curtail as needed according to the order.
         # Take into account the minimum_power for each component, which indicates the minimum power
         # that component should be allowed to produce.
-        for cidx in self.curtailment_order[::-1]:
+        for cidx in self.control_order:
             cc = self.component_controllers[cidx]
 
             if cc.plant_parameters[cc.cname]["component_category"] == "generator":
                 power_reference_component = max(
                     power_reference_with_storage
                     - power_export_total
-                    - (sum(self.minimum_power[i] for i in self.curtailment_order if i < cidx)),
+                    - (sum(self.minimum_power[i] for i in self.control_order if i > cidx)),
                     self.minimum_power[cidx],
                 )
             elif cc.plant_parameters[cc.cname]["component_category"] == "storage":
@@ -177,13 +190,13 @@ class HybridSupervisoryControllerGeneric(ControllerBase):
                     power_reference_component = (
                         power_reference_total
                         - power_export_total
-                        - (sum(self.minimum_power[i] for i in self.curtailment_order if i < cidx))
+                        - (sum(self.minimum_power[i] for i in self.control_order if i > cidx))
                     )
                 else:
                     power_reference_component = max(
                         power_reference_total
                         - power_export_total
-                        - sum(self.minimum_power[i] for i in self.curtailment_order if i < cidx),
+                        - sum(self.minimum_power[i] for i in self.control_order if i > cidx),
                         -locally_generated_power_total,
                     )
                     # Reduce or increase the available power to store
