@@ -63,12 +63,42 @@ class ControllerBase(metaclass=ABCMeta):
         required_args = valid_controller_parameters[:-num_defaults]
 
         missing_required_cps = set(required_args) - set(controller_parameters.keys())
+        
+        if "initial_conditions" in missing_required_cps:
+            missing_required_cps.remove("initial_conditions")
         if len(missing_required_cps) > 0:
             raise KeyError("Missing required controller parameters: " + str(missing_required_cps))
 
         return None
 
     # TODO: Consider an "update controller parameters" method. Not urgent.
+
+    def check_initial_conditions(self, initial_conditions):
+        initial_conditions = initial_conditions or {}
+
+        # Check valid initial conditions
+        valid_initial_conditions = ["control_order", "forced_state", "soc_setpoint"]
+        invalid_ics = [
+            ic for ic in initial_conditions.keys() if ic not in valid_initial_conditions
+        ]
+        if len(invalid_ics) > 0:
+            raise KeyError(
+                "Found keys "
+                + str(invalid_ics)
+                + " in initial_conditions, but they are not valid initial conditions for "
+                + self.__class__.__name__
+                + ". Valid initial_conditions are: "
+                + str(valid_initial_conditions)
+                + "."
+            )
+        missing_ics = [
+            ic for ic in valid_initial_conditions if ic not in initial_conditions
+        ]
+        if len(missing_ics) > 0:
+            for ic in missing_ics:
+                initial_conditions[ic] = None
+
+        return initial_conditions
 
     def compute_controls_without_updating_state(self, measurements_dict):
         """
